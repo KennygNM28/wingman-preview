@@ -1,0 +1,23 @@
+{
+  "name": "workspace",
+  "version": "0.0.0",
+  "license": "MIT",
+  "scripts": {
+    "dev": "API_PORT=8080 WEB_PORT=5173 pnpm --parallel --filter @workspace/api-server --filter @workspace/wingman-sports dev",
+    "start": "API_PORT=8080 WEB_PORT=5173 sh -c 'pnpm --filter @workspace/api-server dev & pnpm --filter @workspace/wingman-sports dev'",
+    "dev:web": "pnpm --filter @workspace/wingman-sports dev",
+    "dev:api": "pnpm --filter @workspace/api-server dev",
+    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "typecheck:libs": "tsc --build",
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "start:strict": "pnpm --parallel --filter @workspace/api-server --filter @workspace/wingman-sports dev"
+  },
+  "private": true,
+  "devDependencies": {
+    "prettier": "^3.9.6",
+    "typescript": "~5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

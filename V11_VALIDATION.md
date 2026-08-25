@@ -1,0 +1,41 @@
+# Wingman v11 Static Validation
+
+Passed **37 / 37** acceptance checks.
+
+- ✅ Nav The Action
+- ✅ Nav The Numbers
+- ✅ Nav Wingman
+- ✅ Nav The Word
+- ✅ Nav The Huddle
+- ✅ Dedicated Wingman route
+- ✅ Profile top-right
+- ✅ MLB fallback count — 30
+- ✅ NFL fallback count — 32
+- ✅ NBA fallback count — 30
+- ✅ Dynamic NCAAF/NCAAB directory
+- ✅ Shared team endpoint
+- ✅ Searchable Numbers
+- ✅ Searchable Favorites
+- ✅ Action split/ML/total
+- ✅ Split heat thresholds
+- ✅ Game Center route
+- ✅ Multisport Wingman endpoint
+- ✅ Wingman timeframe parser
+- ✅ Historical licensed fallback
+- ✅ Historical ESPN summary fallback
+- ✅ Historical scoreboard fallback
+- ✅ Road cover
+- ✅ Current market in Numbers
+- ✅ Player props provider gate
+- ✅ Word 24h
+- ✅ Word legal-noise filter
+- ✅ Huddle bet
+- ✅ Huddle question
+- ✅ Huddle poll
+- ✅ Huddle discussion
+- ✅ Huddle social
+- ✅ Huddle love
+- ✅ Huddle lean
+- ✅ Huddle fade
+- ✅ Old Community removed
+- ✅ Worker-free API logging
