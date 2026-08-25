@@ -1,0 +1,17 @@
+{
+  "name": "Wingman Sports",
+  "short_name": "Wingman",
+  "description": "Phone-first MLB analytics, game action, and research.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#e6002d",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
