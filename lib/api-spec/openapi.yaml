@@ -1,0 +1,538 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: mlb
+    description: MLB live and historical scoreboard operations
+  - name: community
+    description: Public sports discussion discovery feeds
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /mlb/scoreboard:
+    get:
+      operationId: getMlbScoreboard
+      tags: [mlb]
+      summary: Get MLB scoreboard data
+      description: Returns live, final, or scheduled MLB games for a requested date. The server tries ESPN first and falls back to the official MLB schedule feed when ESPN is unavailable.
+      parameters:
+        - name: date
+          in: query
+          required: true
+          description: Calendar date in YYYY-MM-DD format.
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+      responses:
+        "200":
+          description: Scoreboard data from an available provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlbScoreboard"
+        "400":
+          description: Invalid date
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Both scoreboard providers failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /mlb/wingman:
+    post:
+      operationId: postMlbWingman
+      tags: [mlb]
+      summary: Research an MLB first-inning scoring question
+      description: Calculates completed regular-season first-inning scoring rates from the official MLB schedule feed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MlbWingmanInput"
+      responses:
+        "200":
+          description: First-inning scoring research result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlbWingmanResponse"
+        "400":
+          description: Invalid research question
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Unsupported or incomplete question
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: MLB historical data is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /mlb/betting-trends:
+    get:
+      operationId: getMlbBettingTrends
+      tags: [mlb]
+      summary: Get MLB historical betting trends
+      description: Calculates trend summaries from completed regular-season games that have a matchable historical ESPN market line.
+      parameters:
+        - name: team
+          in: query
+          required: true
+          description: Supported MLB team abbreviation.
+          schema:
+            type: string
+            enum: [PHI, NYY, BOS, LAD, SD, NYM, ATL, HOU, CHC, SEA, TOR, TEX]
+        - name: window
+          in: query
+          required: true
+          description: Completed-game review window.
+          schema:
+            type: string
+            enum: ["10", "30", season]
+      responses:
+        "200":
+          description: Betting trend summary with accurately matched historical game lines
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MlbBettingTrendsResponse"
+        "400":
+          description: Invalid team or timeframe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Historical data is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /community:
+    get:
+      operationId: getCommunityFeed
+      tags: [community]
+      summary: Get recent public sports discussion feed
+      description: Returns source-labeled sports discussions published within the previous 24 hours, sorted newest first. Betting posts require curated expert status or specific sport-market context; policy chatter is excluded. Engagement fields are included only when the source exposes them.
+      parameters:
+        - name: section
+          in: query
+          required: true
+          description: Discovery category to load.
+          schema:
+            type: string
+            enum: [betting, news]
+      responses:
+        "200":
+          description: Public discussion feed, including graceful empty/error states
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommunityFeed"
+        "400":
+          description: Invalid community section
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: ["string", "null"]
+      required:
+        - error
+    MlbScoreboard:
+      type: object
+      properties:
+        date:
+          type: string
+        provider:
+          type: string
+          enum: [ESPN, MLB]
+        providerUrl:
+          type: string
+        games:
+          type: array
+          items:
+            $ref: "#/components/schemas/MlbGame"
+        warning:
+          type: ["string", "null"]
+      required:
+        - date
+        - provider
+        - providerUrl
+        - games
+        - warning
+    MlbWingmanInput:
+      type: object
+      properties:
+        question:
+          type: string
+          minLength: 1
+        context:
+          $ref: "#/components/schemas/MlbWingmanContext"
+      required: [question]
+    MlbWingmanContext:
+      type: object
+      properties:
+        sport:
+          type: string
+          enum: [MLB]
+        entityType:
+          type: string
+          enum: [team, player]
+        entityId:
+          type: number
+        entityName:
+          type: string
+        entityShortName:
+          type: string
+        playerGroup:
+          type: string
+          enum: [pitcher, hitter]
+        metric:
+          type: string
+          enum: [first_inning_scoring, team_runs_per_game, team_batting_average, team_home_runs, pitcher_runs_allowed_avg, pitcher_era, pitcher_whip, pitcher_strikeouts, hitter_batting_average, hitter_ops, hitter_home_runs, hitter_strikeouts, pitch_type_performance]
+        timeframe:
+          type: string
+          enum: [current_season, last_3_seasons, previous_season]
+    MlbWingmanResponse:
+      type: object
+      properties:
+        question:
+          type: string
+        context:
+          $ref: "#/components/schemas/MlbWingmanContext"
+        timeframeExplicit:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/MlbWingmanResult"
+        answer:
+          type: string
+      required: [question, context, timeframeExplicit, result, answer]
+    MlbWingmanResult:
+      type: object
+      properties:
+        title: { type: string }
+        entityName: { type: string }
+        timeframeLabel: { type: string }
+        primaryLabel: { type: string }
+        primaryValue: { type: string }
+        stats:
+          type: array
+          items:
+            type: object
+            properties:
+              label: { type: string }
+              value: { type: string }
+              detail: { type: string }
+            required: [label, value]
+        sampleLabel: { type: string }
+        source: { type: string }
+        note: { type: string }
+      required: [title, entityName, timeframeLabel, primaryLabel, primaryValue, stats, source]
+    MlbBettingTrendsResponse:
+      type: object
+      properties:
+        team:
+          type: string
+        teamName:
+          type: string
+        window:
+          type: string
+          enum: ["10", "30", season]
+        windowLabel:
+          type: string
+        gamesReviewed:
+          type: number
+        gamesWithOdds:
+          type: number
+        metrics:
+          $ref: "#/components/schemas/MlbBettingMetrics"
+        recent:
+          type: array
+          items:
+            $ref: "#/components/schemas/MlbHistoricalBetGame"
+        warning:
+          type: ["string", "null"]
+      required:
+        - team
+        - teamName
+        - window
+        - windowLabel
+        - gamesReviewed
+        - gamesWithOdds
+        - metrics
+        - recent
+        - warning
+    MlbBettingMetrics:
+      type: object
+      properties:
+        overallCover:
+          $ref: "#/components/schemas/MlbTrendMetric"
+        homeCover:
+          $ref: "#/components/schemas/MlbTrendMetric"
+        favoriteCover:
+          $ref: "#/components/schemas/MlbTrendMetric"
+        underdogCover:
+          $ref: "#/components/schemas/MlbTrendMetric"
+        favoriteMoneylineWin:
+          $ref: "#/components/schemas/MlbTrendMetric"
+        overRate:
+          $ref: "#/components/schemas/MlbTrendMetric"
+      required: [overallCover, homeCover, favoriteCover, underdogCover, favoriteMoneylineWin, overRate]
+    MlbTrendMetric:
+      type: object
+      properties:
+        label:
+          type: string
+        rate:
+          type: ["number", "null"]
+        wins:
+          type: number
+        losses:
+          type: number
+        pushes:
+          type: number
+        sample:
+          type: number
+      required: [label, rate, wins, losses, pushes, sample]
+    MlbHistoricalBetGame:
+      type: object
+      properties:
+        date:
+          type: string
+        opponent:
+          type: string
+        location:
+          type: string
+          enum: [home, away]
+        teamScore:
+          type: number
+        opponentScore:
+          type: number
+        spread:
+          type: ["number", "null"]
+        coverResult:
+          type: ["string", "null"]
+          enum: [W, L, P, null]
+        moneyline:
+          type: ["number", "null"]
+        total:
+          type: ["number", "null"]
+        totalResult:
+          type: ["string", "null"]
+          enum: [O, U, P, null]
+      required: [date, opponent, location, teamScore, opponentScore, spread, coverResult, moneyline, total, totalResult]
+    MlbGame:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [upcoming, live, final, postponed, canceled]
+        statusLabel:
+          type: string
+        startTime:
+          type: string
+        venue:
+          type: string
+        inning:
+          type: ["string", "null"]
+        balls:
+          type: ["number", "null"]
+        strikes:
+          type: ["number", "null"]
+        outs:
+          type: ["number", "null"]
+        onFirst:
+          type: ["boolean", "null"]
+        onSecond:
+          type: ["boolean", "null"]
+        onThird:
+          type: ["boolean", "null"]
+        away:
+          $ref: "#/components/schemas/MlbTeam"
+        home:
+          $ref: "#/components/schemas/MlbTeam"
+        betting:
+          type: ["object", "null"]
+          properties:
+            awaySpread:
+              type: ["number", "null"]
+            homeSpread:
+              type: ["number", "null"]
+            awaySpreadPrice:
+              type: ["number", "null"]
+            homeSpreadPrice:
+              type: ["number", "null"]
+            awayMoneyline:
+              type: ["number", "null"]
+            homeMoneyline:
+              type: ["number", "null"]
+            total:
+              type: ["number", "null"]
+            overPrice:
+              type: ["number", "null"]
+            underPrice:
+              type: ["number", "null"]
+          required:
+            - awaySpread
+            - homeSpread
+            - awaySpreadPrice
+            - homeSpreadPrice
+            - awayMoneyline
+            - homeMoneyline
+            - total
+            - overPrice
+            - underPrice
+      required:
+        - id
+        - status
+        - statusLabel
+        - startTime
+        - venue
+        - inning
+        - balls
+        - strikes
+        - outs
+        - onFirst
+        - onSecond
+        - onThird
+        - away
+        - home
+        - betting
+    MlbTeam:
+      type: object
+      properties:
+        abbreviation:
+          type: string
+        name:
+          type: string
+        shortName:
+          type: string
+        score:
+          type: ["number", "null"]
+        record:
+          type: ["string", "null"]
+        logo:
+          type: ["string", "null"]
+      required:
+        - abbreviation
+        - name
+        - shortName
+        - score
+        - record
+        - logo
+    CommunityFeed:
+      type: object
+      properties:
+        section:
+          type: string
+          enum: [betting, news]
+        source:
+          type: string
+        sourceUrl:
+          type: string
+        posts:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommunityPost"
+        warning:
+          type: ["string", "null"]
+      required:
+        - section
+        - source
+        - sourceUrl
+        - posts
+        - warning
+    CommunityPost:
+      type: object
+      properties:
+        id:
+          type: string
+        source:
+          type: string
+        community:
+          type: string
+        author:
+          type: ["string", "null"]
+        headline:
+          type: string
+        excerpt:
+          type: ["string", "null"]
+        publishedAt:
+          type: string
+        url:
+          type: string
+        score:
+          type: ["number", "null"]
+        comments:
+          type: ["number", "null"]
+        likes:
+          type: ["number", "null"]
+        reposts:
+          type: ["number", "null"]
+        isCuratedExpert:
+          type: boolean
+          description: True when source-provided account metadata or a recognized betting-media publisher identifies the author or publisher as betting-focused.
+        sport:
+          type: ["string", "null"]
+        market:
+          type: ["string", "null"]
+      required:
+        - id
+        - source
+        - community
+        - author
+        - headline
+        - excerpt
+        - publishedAt
+        - url
+        - isCuratedExpert
+        - sport
+        - market
+
