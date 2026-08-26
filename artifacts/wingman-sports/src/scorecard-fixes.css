@@ -1,11 +1,13 @@
 /* Scorecard-specific refinements.
-   Compact baseball diamond modeled after the familiar field layout:
-   2B top, 3B left, 1B right, home plate bottom. */
+   Compact baseball diamond modeled after the familiar field layout.
+   Every marker is positioned by its CENTER so it lands exactly on a
+   diamond vertex: 2B top, 3B left, 1B right, home plate bottom. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] {
   position: relative !important;
   width: 2.8rem !important;
   height: 2.8rem !important;
   flex: 0 0 2.8rem !important;
+  --wm-diamond-half-diagonal: 1.216rem;
 }
 
 /* Connected baselines behind the base markers. */
@@ -29,40 +31,43 @@
   inset: auto !important;
   z-index: 1;
   box-sizing: border-box;
+  margin: 0 !important;
 }
 
-/* 3B */
+/* 3B — center sits exactly on the left vertex. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(1) {
   display: block !important;
-  left: .18rem !important;
+  left: calc(50% - var(--wm-diamond-half-diagonal)) !important;
   top: 50% !important;
-  transform: translateY(-50%) rotate(45deg) !important;
+  transform: translate(-50%, -50%) rotate(45deg) !important;
 }
 
-/* 2B */
+/* 2B — center sits exactly on the top vertex. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(2) {
   display: block !important;
   left: 50% !important;
-  top: .18rem !important;
-  transform: translateX(-50%) rotate(45deg) !important;
+  top: calc(50% - var(--wm-diamond-half-diagonal)) !important;
+  transform: translate(-50%, -50%) rotate(45deg) !important;
 }
 
-/* 1B */
+/* 1B — center sits exactly on the right vertex. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(3) {
   display: block !important;
-  right: .18rem !important;
+  left: calc(50% + var(--wm-diamond-half-diagonal)) !important;
   top: 50% !important;
-  transform: translateY(-50%) rotate(45deg) !important;
+  right: auto !important;
+  transform: translate(-50%, -50%) rotate(45deg) !important;
 }
 
-/* Home plate anchor — never represents an occupied base. */
+/* Home plate — center sits on the bottom vertex and is never occupied. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(4) {
   display: block !important;
   left: 50% !important;
-  bottom: .08rem !important;
+  top: calc(50% + var(--wm-diamond-half-diagonal)) !important;
+  bottom: auto !important;
   width: .66rem !important;
   height: .66rem !important;
-  transform: translateX(-50%) !important;
+  transform: translate(-50%, -50%) !important;
   clip-path: polygon(10% 0, 90% 0, 90% 58%, 50% 100%, 10% 58%);
   border: 0 !important;
   background: rgba(255,255,255,.08) !important;
