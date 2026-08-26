@@ -53,6 +53,28 @@ function american(v: unknown): number | null {
   if (x <= 1) return null;
   return x >= 2 ? Math.round((x - 1) * 100) : Math.round(-100 / (x - 1));
 }
+function implied(v: unknown): number | null {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return null;
+  if (Math.abs(x) >= 100) return x > 0 ? 100 / (x + 100) : -x / (-x + 100);
+  if (x > 1) return 1 / x;
+  return null;
+}
+function balancedRow(marketRows: AnyRecord[], leftKey: string, rightKey: string): AnyRecord | null {
+  let best: AnyRecord | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const row of marketRows) {
+    const left = implied(row[leftKey]);
+    const right = implied(row[rightKey]);
+    if (left === null || right === null) continue;
+    const score = Math.abs(left - right);
+    if (score < bestScore) {
+      best = row;
+      bestScore = score;
+    }
+  }
+  return best ?? marketRows[0] ?? null;
+}
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -82,6 +104,22 @@ function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
     ...Object.keys(bookmakers).filter((name) => !wantedBooks.includes(name)),
   ];
 
+  const out: Betting = {
+    awaySpread: null,
+    homeSpread: null,
+    awaySpreadPrice: null,
+    homeSpreadPrice: null,
+    awayMoneyline: null,
+    homeMoneyline: null,
+    total: null,
+    overPrice: null,
+    underPrice: null,
+    splits: null,
+    source: 'Odds-API.io',
+    bookmaker: '',
+  };
+  const usedBooks: string[] = [];
+
   for (const book of ordered) {
     const source = bookmakers[book];
     const markets = Array.isArray(source)
@@ -89,54 +127,78 @@ function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
       : source && typeof source === 'object'
         ? Object.values(source).map(rec)
         : [];
-
-    const out: Betting = {
-      awaySpread: null,
-      homeSpread: null,
-      awaySpreadPrice: null,
-      homeSpreadPrice: null,
-      awayMoneyline: null,
-      homeMoneyline: null,
-      total: null,
-      overPrice: null,
-      underPrice: null,
-      splits: null,
-      source: 'Odds-API.io',
-      bookmaker: book,
-    };
+    let contributed = false;
 
     for (const market of markets) {
       const name = String(market.name ?? market.market ?? '').toLowerCase();
+      const compactName = name.replace(/[^a-z0-9]/g, '');
       const marketRows = Array.isArray(market.odds) ? market.odds.map(rec) : [market];
-      for (const row of marketRows) {
-        if (/^(ml|moneyline|money line|h2h)$/.test(name) || name.includes('moneyline')) {
-          out.homeMoneyline ??= american(row.home);
-          out.awayMoneyline ??= american(row.away);
-        } else if (name.includes('spread') || name.includes('handicap') || name.includes('run line')) {
+
+      if (
+        compactName === 'ml' ||
+        compactName === 'moneyline' ||
+        compactName === 'h2h' ||
+        compactName.includes('moneyline') ||
+        compactName.includes('matchwinner')
+      ) {
+        const row = marketRows.find((candidate) => american(candidate.home) !== null || american(candidate.away) !== null);
+        if (row) {
+          const home = american(row.home);
+          const away = american(row.away);
+          if (out.homeMoneyline === null && home !== null) {
+            out.homeMoneyline = home;
+            contributed = true;
+          }
+          if (out.awayMoneyline === null && away !== null) {
+            out.awayMoneyline = away;
+            contributed = true;
+          }
+        }
+      } else if (name.includes('spread') || name.includes('handicap') || name.includes('run line')) {
+        const row = balancedRow(marketRows, 'home', 'away');
+        if (row && out.homeSpread === null && out.awaySpread === null) {
           const hdp = num(row.hdp ?? row.handicap ?? row.line);
           if (hdp !== null) {
-            out.homeSpread ??= hdp;
-            out.awaySpread ??= -hdp;
+            out.homeSpread = hdp;
+            out.awaySpread = -hdp;
+            out.homeSpreadPrice = american(row.home);
+            out.awaySpreadPrice = american(row.away);
+            contributed = true;
           }
-          out.homeSpreadPrice ??= american(row.home);
-          out.awaySpreadPrice ??= american(row.away);
-        } else if (name.includes('total') || name.includes('over/under') || name.includes('over under')) {
-          out.total ??= num(row.hdp ?? row.total ?? row.line);
-          out.overPrice ??= american(row.over);
-          out.underPrice ??= american(row.under);
+        }
+      } else if (name.includes('total') || name.includes('over/under') || name.includes('over under')) {
+        const row = balancedRow(marketRows, 'over', 'under');
+        if (row && out.total === null) {
+          const total = num(row.hdp ?? row.total ?? row.line);
+          if (total !== null) {
+            out.total = total;
+            out.overPrice = american(row.over);
+            out.underPrice = american(row.under);
+            contributed = true;
+          }
         }
       }
     }
 
-    if (
-      out.awaySpread !== null ||
-      out.homeSpread !== null ||
-      out.awayMoneyline !== null ||
-      out.homeMoneyline !== null ||
-      out.total !== null
-    ) return out;
+    if (contributed) usedBooks.push(book);
+    const complete =
+      out.homeMoneyline !== null &&
+      out.awayMoneyline !== null &&
+      out.homeSpread !== null &&
+      out.awaySpread !== null &&
+      out.total !== null;
+    if (complete) break;
   }
-  return null;
+
+  const hasAnything =
+    out.awaySpread !== null ||
+    out.homeSpread !== null ||
+    out.awayMoneyline !== null ||
+    out.homeMoneyline !== null ||
+    out.total !== null;
+  if (!hasAnything) return null;
+  out.bookmaker = usedBooks.join(' / ') || ordered[0] || 'Odds-API.io';
+  return out;
 }
 
 function historicalBetting(payload: unknown, books: string[]): Betting | null {
