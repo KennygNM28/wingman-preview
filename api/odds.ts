@@ -60,20 +60,11 @@ function implied(v: unknown): number | null {
   if (x > 1) return 1 / x;
   return null;
 }
-function balancedRow(marketRows: AnyRecord[], leftKey: string, rightKey: string): AnyRecord | null {
-  let best: AnyRecord | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
-  for (const row of marketRows) {
-    const left = implied(row[leftKey]);
-    const right = implied(row[rightKey]);
-    if (left === null || right === null) continue;
-    const score = Math.abs(left - right);
-    if (score < bestScore) {
-      best = row;
-      bestScore = score;
-    }
-  }
-  return best ?? marketRows[0] ?? null;
+function timestampMs(v: unknown): number | null {
+  const n = Number(v);
+  if (Number.isFinite(n)) return n < 10_000_000_000 ? n * 1000 : n;
+  const parsed = Date.parse(String(v ?? ''));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -97,7 +88,109 @@ async function fetchJson(url: string, stage: string): Promise<any> {
   return JSON.parse(text);
 }
 
-function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
+function marketRows(market: AnyRecord): AnyRecord[] {
+  if (Array.isArray(market.odds)) return market.odds.map(rec);
+  if (market.odds && typeof market.odds === 'object') {
+    const oddsObject = rec(market.odds);
+    if (
+      'home' in oddsObject || 'away' in oddsObject || 'over' in oddsObject ||
+      'under' in oddsObject || 'hdp' in oddsObject || 'line' in oddsObject
+    ) return [oddsObject];
+    return Object.values(oddsObject)
+      .flatMap((value) => Array.isArray(value) ? value.map(rec) : [rec(value)])
+      .filter((row) => Object.keys(row).length > 0);
+  }
+  return [market];
+}
+function marketsFromBook(source: unknown): AnyRecord[] {
+  if (Array.isArray(source)) return source.map(rec);
+  const object = rec(source);
+  return Object.entries(object).map(([key, value]) => {
+    const market = rec(value);
+    return { ...market, name: market.name ?? market.market ?? key };
+  });
+}
+function compactMarketName(market: AnyRecord): string {
+  return String(market.name ?? market.market ?? market.type ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+function isAlternateOrDerivative(name: string): boolean {
+  return /alternative|alternate|altline|teamtotal|player|prop|inning|period|quarter|half|1st|first|2nd|second/.test(name);
+}
+function marketPriority(market: AnyRecord, kind: 'ml' | 'spread' | 'total'): number {
+  const name = compactMarketName(market);
+  if (!name || isAlternateOrDerivative(name)) return Number.POSITIVE_INFINITY;
+  if (kind === 'ml') {
+    if (name === 'ml' || name === 'moneyline') return 0;
+    if (name === 'h2h' || name === 'matchresult' || name === 'matchwinner') return 1;
+    if (name.includes('moneyline')) return 2;
+    return Number.POSITIVE_INFINITY;
+  }
+  if (kind === 'spread') {
+    if (name === 'spread' || name === 'runline' || name === 'asianhandicap' || name === 'handicap') return 0;
+    if (name.includes('runline') || name.includes('spread')) return 2;
+    return Number.POSITIVE_INFINITY;
+  }
+  if (name === 'totals' || name === 'total' || name === 'overunder' || name === 'gametotal') return 0;
+  if (name.includes('overunder') || name.includes('totals')) return 2;
+  return Number.POSITIVE_INFINITY;
+}
+function canonicalMarket(markets: AnyRecord[], kind: 'ml' | 'spread' | 'total'): AnyRecord | null {
+  return markets
+    .map((market) => ({ market, priority: marketPriority(market, kind) }))
+    .filter((item) => Number.isFinite(item.priority))
+    .sort((a, b) => a.priority - b.priority)[0]?.market ?? null;
+}
+function balancedRow(
+  marketRowsList: AnyRecord[],
+  leftKey: string,
+  rightKey: string,
+  options?: { minLine?: number; maxLine?: number; preferAbsLine?: number },
+): AnyRecord | null {
+  let best: AnyRecord | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const row of marketRowsList) {
+    const left = implied(row[leftKey]);
+    const right = implied(row[rightKey]);
+    if (left === null || right === null) continue;
+    if (left < 0.12 || left > 0.88 || right < 0.12 || right > 0.88) continue;
+    const line = num(row.hdp ?? row.total ?? row.handicap ?? row.line);
+    if (options?.minLine != null && (line === null || line < options.minLine)) continue;
+    if (options?.maxLine != null && (line === null || line > options.maxLine)) continue;
+    let score = Math.abs(left - right) + Math.abs(left + right - 1.05) * 0.35;
+    if (options?.preferAbsLine != null && line !== null) {
+      score += Math.abs(Math.abs(line) - options.preferAbsLine) * 0.2;
+    }
+    if (score < bestScore) {
+      best = row;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+function historicalMarketLooksPregame(market: AnyRecord, startTime?: string): boolean {
+  if (!startTime) return true;
+  const eventStart = Date.parse(startTime);
+  if (!Number.isFinite(eventStart)) return true;
+  const updated = timestampMs(market.updatedAt ?? market.updated ?? market.timestamp);
+  if (updated === null) return true;
+  return updated <= eventStart + 5 * 60 * 1000;
+}
+function totalRange(league?: LeagueKey): { minLine?: number; maxLine?: number } {
+  if (league === 'mlb') return { minLine: 5.5, maxLine: 15.5 };
+  if (league === 'nfl') return { minLine: 20, maxLine: 80 };
+  if (league === 'nba') return { minLine: 150, maxLine: 300 };
+  if (league === 'ncaaf') return { minLine: 20, maxLine: 100 };
+  if (league === 'ncaab') return { minLine: 80, maxLine: 200 };
+  return {};
+}
+
+function parseMarkets(
+  raw: AnyRecord,
+  wantedBooks: string[],
+  options?: { league?: LeagueKey; historical?: boolean; startTime?: string },
+): Betting | null {
   const bookmakers = rec(raw.bookmakers);
   const ordered = [
     ...wantedBooks.filter((name) => bookmakers[name] != null),
@@ -121,87 +214,108 @@ function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
   const usedBooks: string[] = [];
 
   for (const book of ordered) {
-    const source = bookmakers[book];
-    const markets = Array.isArray(source)
-      ? source.map(rec)
-      : source && typeof source === 'object'
-        ? Object.values(source).map(rec)
-        : [];
+    let markets = marketsFromBook(bookmakers[book]);
+    if (options?.historical) {
+      markets = markets.filter((market) => historicalMarketLooksPregame(market, options.startTime));
+    }
     let contributed = false;
 
-    for (const market of markets) {
-      const name = String(market.name ?? market.market ?? '').toLowerCase();
-      const compactName = name.replace(/[^a-z0-9]/g, '');
-      const marketRows = Array.isArray(market.odds) ? market.odds.map(rec) : [market];
-
-      if (
-        compactName === 'ml' ||
-        compactName === 'moneyline' ||
-        compactName === 'h2h' ||
-        compactName.includes('moneyline') ||
-        compactName.includes('matchwinner')
-      ) {
-        const row = marketRows.find((candidate) => american(candidate.home) !== null || american(candidate.away) !== null);
+    if (out.homeMoneyline === null || out.awayMoneyline === null) {
+      const market = canonicalMarket(markets, 'ml');
+      if (market) {
+        const row = marketRows(market).find((candidate) => {
+          const home = implied(candidate.home);
+          const away = implied(candidate.away);
+          return home !== null && away !== null && home > 0.04 && home < 0.96 && away > 0.04 && away < 0.96;
+        });
         if (row) {
           const home = american(row.home);
           const away = american(row.away);
-          if (out.homeMoneyline === null && home !== null) {
-            out.homeMoneyline = home;
-            contributed = true;
-          }
-          if (out.awayMoneyline === null && away !== null) {
-            out.awayMoneyline = away;
-            contributed = true;
-          }
+          if (out.homeMoneyline === null && home !== null) { out.homeMoneyline = home; contributed = true; }
+          if (out.awayMoneyline === null && away !== null) { out.awayMoneyline = away; contributed = true; }
         }
-      } else if (name.includes('spread') || name.includes('handicap') || name.includes('run line')) {
-        const row = balancedRow(marketRows, 'home', 'away');
-        if (row && out.homeSpread === null && out.awaySpread === null) {
-          const hdp = num(row.hdp ?? row.handicap ?? row.line);
-          if (hdp !== null) {
-            out.homeSpread = hdp;
-            out.awaySpread = -hdp;
-            out.homeSpreadPrice = american(row.home);
-            out.awaySpreadPrice = american(row.away);
-            contributed = true;
-          }
+      }
+    }
+
+    if (out.homeSpread === null || out.awaySpread === null) {
+      const market = canonicalMarket(markets, 'spread');
+      if (market) {
+        const spreadOptions = options?.historical && options.league === 'mlb' ? { preferAbsLine: 1.5 } : undefined;
+        const row = balancedRow(marketRows(market), 'home', 'away', spreadOptions);
+        const hdp = row ? num(row.hdp ?? row.handicap ?? row.line) : null;
+        if (row && hdp !== null) {
+          out.homeSpread = hdp;
+          out.awaySpread = -hdp;
+          out.homeSpreadPrice = american(row.home);
+          out.awaySpreadPrice = american(row.away);
+          contributed = true;
         }
-      } else if (name.includes('total') || name.includes('over/under') || name.includes('over under')) {
-        const row = balancedRow(marketRows, 'over', 'under');
-        if (row && out.total === null) {
-          const total = num(row.hdp ?? row.total ?? row.line);
-          if (total !== null) {
-            out.total = total;
-            out.overPrice = american(row.over);
-            out.underPrice = american(row.under);
-            contributed = true;
-          }
+      }
+    }
+
+    if (out.total === null) {
+      const market = canonicalMarket(markets, 'total');
+      if (market) {
+        const range = options?.historical ? totalRange(options.league) : {};
+        const row = balancedRow(marketRows(market), 'over', 'under', range);
+        const total = row ? num(row.hdp ?? row.total ?? row.line) : null;
+        if (row && total !== null) {
+          out.total = total;
+          out.overPrice = american(row.over);
+          out.underPrice = american(row.under);
+          contributed = true;
         }
       }
     }
 
     if (contributed) usedBooks.push(book);
     const complete =
-      out.homeMoneyline !== null &&
-      out.awayMoneyline !== null &&
-      out.homeSpread !== null &&
-      out.awaySpread !== null &&
-      out.total !== null;
+      out.homeMoneyline !== null && out.awayMoneyline !== null &&
+      out.homeSpread !== null && out.awaySpread !== null && out.total !== null;
     if (complete) break;
   }
 
   const hasAnything =
-    out.awaySpread !== null ||
-    out.homeSpread !== null ||
-    out.awayMoneyline !== null ||
-    out.homeMoneyline !== null ||
-    out.total !== null;
+    out.awaySpread !== null || out.homeSpread !== null ||
+    out.awayMoneyline !== null || out.homeMoneyline !== null || out.total !== null;
   if (!hasAnything) return null;
   out.bookmaker = usedBooks.join(' / ') || ordered[0] || 'Odds-API.io';
   return out;
 }
 
-function historicalBetting(payload: unknown, books: string[]): Betting | null {
+function movementRowBeforeStart(payload: unknown, startTime: string): AnyRecord | null {
+  const root = rec(payload);
+  const cutoff = Date.parse(startTime);
+  const candidates = [rec(root.opening), ...arr(root.movements)];
+  if (!Number.isFinite(cutoff)) return candidates.filter((row) => Object.keys(row).length > 0).at(-1) ?? null;
+  const eligible = candidates
+    .map((row) => ({ row, ts: timestampMs(row.timestamp ?? row.updatedAt ?? row.updated) }))
+    .filter((item) => Object.keys(item.row).length > 0 && (item.ts === null || item.ts <= cutoff + 60_000))
+    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  return eligible.at(-1)?.row ?? null;
+}
+async function historicalMoneyline(
+  eventId: string,
+  startTime: string,
+  apiKey: string,
+  books: string[],
+): Promise<Pick<Betting, 'homeMoneyline' | 'awayMoneyline' | 'bookmaker'> | null> {
+  for (const book of books) {
+    try {
+      const q = new URLSearchParams({ apiKey, eventId, bookmaker: book, market: 'ML' });
+      const payload = await fetchJson(`${API_BASE}/odds/movements?${q.toString()}`, `moneyline movements ${eventId}`);
+      const row = movementRowBeforeStart(payload, startTime);
+      const home = row ? american(row.home) : null;
+      const away = row ? american(row.away) : null;
+      if (home !== null && away !== null) return { homeMoneyline: home, awayMoneyline: away, bookmaker: book };
+    } catch {
+      // Try the next configured bookmaker.
+    }
+  }
+  return null;
+}
+
+function historicalBetting(payload: unknown, books: string[], league: LeagueKey, startTime: string): Betting | null {
   const root = rec(payload);
   const candidates: AnyRecord[] = [];
   if (Array.isArray(payload)) candidates.push(...arr(payload));
@@ -210,7 +324,7 @@ function historicalBetting(payload: unknown, books: string[]): Betting | null {
   }
   if (Object.keys(root).length) candidates.push(root);
   for (let i = candidates.length - 1; i >= 0; i -= 1) {
-    const parsed = parseMarkets(candidates[i], books);
+    const parsed = parseMarkets(candidates[i], books, { league, historical: true, startTime });
     if (parsed) return { ...parsed, source: 'Odds-API.io historical' };
   }
   return null;
@@ -224,7 +338,6 @@ function dateWindow(date: string) {
     to: new Date(start.getTime() + 36 * 60 * 60 * 1000).toISOString(),
   };
 }
-
 function isPastDate(date: string) {
   const today = new Date().toISOString().slice(0, 10);
   return date < today;
@@ -252,22 +365,32 @@ async function historicalRows(
   const settled = await Promise.allSettled(
     wanted.map(async (event) => {
       const id = String(event.id ?? '');
-      const oq = new URLSearchParams({
-        apiKey,
-        eventId: id,
-        bookmakers: books.join(','),
-      });
+      const startTime = String(event.date ?? '');
+      const oq = new URLSearchParams({ apiKey, eventId: id, bookmakers: books.join(',') });
       const payload = await fetchJson(
         `${API_BASE}/historical/odds?${oq.toString()}`,
         `historical odds lookup ${id}`,
       );
-      const betting = historicalBetting(payload, books);
+      let betting = historicalBetting(payload, books, league, startTime);
       if (!betting) return null;
+
+      if (betting.homeMoneyline === null || betting.awayMoneyline === null) {
+        const ml = await historicalMoneyline(id, startTime, apiKey, books);
+        if (ml) {
+          betting = {
+            ...betting,
+            homeMoneyline: betting.homeMoneyline ?? ml.homeMoneyline,
+            awayMoneyline: betting.awayMoneyline ?? ml.awayMoneyline,
+            bookmaker: [betting.bookmaker, ml.bookmaker].filter(Boolean).join(' / '),
+          };
+        }
+      }
+
       return {
         id,
         home: String(event.home ?? ''),
         away: String(event.away ?? ''),
-        startTime: String(event.date ?? ''),
+        startTime,
         status: 'settled',
         betting,
       };
@@ -281,7 +404,7 @@ async function historicalRows(
 }
 
 async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: string[]) {
-  const cacheKey = `${league}:${date}:${books.join(',')}`;
+  const cacheKey = `v3:${league}:${date}:${books.join(',')}`;
   const cached = memory.get(cacheKey);
   if (cached && cached.expires > Date.now()) return cached.value;
 
@@ -309,11 +432,7 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
   if (ids.length) {
     const results = await Promise.allSettled(
       chunk(ids, 10).map(async (batch) => {
-        const q = new URLSearchParams({
-          apiKey,
-          eventIds: batch.join(','),
-          bookmakers: books.join(','),
-        });
+        const q = new URLSearchParams({ apiKey, eventIds: batch.join(','), bookmakers: books.join(',') });
         return rows(await fetchJson(`${API_BASE}/odds/multi?${q.toString()}`, 'odds lookup'));
       }),
     );
@@ -326,7 +445,7 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
   const parsed = oddsRows
     .map((row) => {
       const event = eventById.get(String(row.id ?? '')) ?? row;
-      const betting = parseMarkets(row, books);
+      const betting = parseMarkets(row, books, { league });
       if (!betting) return null;
       return {
         id: String(row.id ?? event.id ?? ''),
@@ -355,12 +474,7 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
     }
   }
 
-  const value = {
-    provider: 'Odds-API.io',
-    bookmakers: books,
-    events: parsed,
-    warning,
-  };
+  const value = { provider: 'Odds-API.io', bookmakers: books, events: parsed, warning };
   memory.set(cacheKey, {
     expires: Date.now() + (isPastDate(date) ? 6 * 60 * 60 * 1000 : 15 * 60 * 1000),
     value,
