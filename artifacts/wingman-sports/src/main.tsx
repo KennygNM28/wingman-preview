@@ -4,6 +4,7 @@ import App from './App';
 import { ErrorBoundary } from '@/components/error-boundary';
 
 import './index.css';
+import './scorecard-fixes.css';
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
