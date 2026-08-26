@@ -1,20 +1,36 @@
 /* Scorecard-specific refinements.
-   Keep live baseball bases in the familiar three-base triangle:
-   2B at top, 3B lower-left, 1B lower-right. */
+   MLB runner indicator: 2B at the top, 3B lower-left, 1B lower-right.
+   Reset Tailwind's translate property so the original utility classes cannot
+   shift the bases after these explicit positions are applied. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] {
-  width: 3.25rem !important;
-  height: 2.65rem !important;
+  position: relative !important;
+  width: 3.5rem !important;
+  height: 2.75rem !important;
+  overflow: visible !important;
+  flex: 0 0 3.5rem !important;
 }
 
+.wm-game-card div[aria-label] div[aria-hidden="true"] > span {
+  position: absolute !important;
+  width: .72rem !important;
+  height: .72rem !important;
+  margin: 0 !important;
+  translate: none !important;
+}
+
+/* 3B */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(1) {
-  left: .28rem !important;
+  display: block !important;
+  left: .35rem !important;
   right: auto !important;
-  top: 1.18rem !important;
+  top: 1.35rem !important;
   bottom: auto !important;
   transform: rotate(45deg) !important;
 }
 
+/* 2B */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(2) {
+  display: block !important;
   left: 50% !important;
   right: auto !important;
   top: .08rem !important;
@@ -22,15 +38,17 @@
   transform: translateX(-50%) rotate(45deg) !important;
 }
 
+/* 1B */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(3) {
+  display: block !important;
   left: auto !important;
-  right: .28rem !important;
-  top: 1.18rem !important;
+  right: .35rem !important;
+  top: 1.35rem !important;
   bottom: auto !important;
   transform: rotate(45deg) !important;
 }
 
-/* Home plate is not part of the occupied-base indicator. */
+/* Home plate is intentionally not part of the occupied-base indicator. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(4) {
   display: none !important;
 }
