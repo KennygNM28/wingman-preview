@@ -218,7 +218,7 @@ function dedupe(posts: AnyRecord[]): AnyRecord[] {
   });
 }
 
-router.get("/community/feed", async (req, res) => {
+router.get("/community/feed", async (req: any, res: any) => {
   const rawSection = String(req.query.section ?? "news").toLowerCase();
   if (rawSection !== "betting" && rawSection !== "news") {
     res.status(400).json({ error: "Invalid section. Use betting or news." });
