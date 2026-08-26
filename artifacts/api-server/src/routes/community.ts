@@ -1,34 +1,18 @@
-import { Router, type IRouter } from "express";
-import {
-  GetCommunityFeedQueryParams,
-  GetCommunityFeedResponse,
-} from "@workspace/api-zod";
+import { Router } from "express";
 import { CURATED_X_BETTING_EXPERT_HANDLES } from "./community-experts.js";
 
-const router: IRouter = Router();
+const router = Router();
 const REDDIT_BASE_URL = "https://www.reddit.com";
-const HACKER_NEWS_SEARCH_URL = "https://hn.algolia.com/api/v1/search_by_date";
+const X_RECENT_SEARCH_URL = "https://api.x.com/2/tweets/search/recent";
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
 const ESPN_NEWS_FEEDS = [
   { label: "ESPN MLB", sport: "MLB", url: "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/news?limit=100" },
   { label: "ESPN NFL", sport: "NFL", url: "https://site.api.espn.com/apis/site/v2/sports/football/nfl/news?limit=100" },
   { label: "ESPN NBA", sport: "NBA", url: "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=100" },
-  { label: "ESPN NCAAF", sport: "NCAA", url: "https://site.api.espn.com/apis/site/v2/sports/football/college-football/news?limit=100" },
-  { label: "ESPN NCAAB", sport: "NCAA", url: "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/news?limit=100" },
-  { label: "ESPN NHL", sport: "NHL", url: "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/news?limit=100" },
-  { label: "ESPN WNBA", sport: "WNBA", url: "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/news?limit=100" },
+  { label: "ESPN NCAAF", sport: "NCAAF", url: "https://site.api.espn.com/apis/site/v2/sports/football/college-football/news?limit=100" },
+  { label: "ESPN NCAAB", sport: "NCAAB", url: "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/news?limit=100" },
 ] as const;
-const COVERS_ODDSSHARK_URL = "https://www.covers.com/oddsshark";
-const X_RECENT_SEARCH_URL = "https://api.x.com/2/tweets/search/recent";
-const X_SEARCH_PAGE_URL =
-  "https://x.com/search?q=%28moneyline%20OR%20spread%20OR%20total%20OR%20prop%20OR%20parlay%20OR%20odds%20OR%20pick%29&src=typed_query";
-const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
-const HACKER_NEWS_BETTING_QUERIES = [
-  "sports betting",
-  "sportsbook odds",
-  "MLB odds",
-  "NBA odds",
-  "NFL odds",
-];
 
 type AnyRecord = Record<string, any>;
 type CommunitySection = "betting" | "news";
@@ -54,18 +38,6 @@ function cleanText(value: unknown): string {
   return str(value).replace(/\s+/g, " ").trim();
 }
 
-function stripHtml(value: unknown): string {
-  return cleanText(
-    str(value)
-      .replace(/<[^>]*>/g, " ")
-      .replace(/&amp;/gi, "&")
-      .replace(/&quot;/gi, '"')
-      .replace(/&#39;/gi, "'")
-      .replace(/&lt;/gi, "<")
-      .replace(/&gt;/gi, ">"),
-  );
-}
-
 function toIso(value: unknown): string {
   const date = new Date(value as any);
   return Number.isNaN(date.getTime()) ? new Date(0).toISOString() : date.toISOString();
@@ -73,7 +45,7 @@ function toIso(value: unknown): string {
 
 function recentEnough(value: unknown): boolean {
   const time = new Date(value as any).getTime();
-  return Number.isFinite(time) && Date.now() - time <= TWENTY_FOUR_HOURS_MS;
+  return Number.isFinite(time) && time > 0 && Date.now() - time <= TWENTY_FOUR_HOURS_MS;
 }
 
 function bettingRelevant(text: string): boolean {
@@ -81,40 +53,30 @@ function bettingRelevant(text: string): boolean {
 }
 
 function legalizationOnly(text: string): boolean {
-  return /(legalization|legalize|legislation|bill passed|state legislature|sports betting law|gambling law|regulation only)/i.test(text) && !/(pick|odds|spread|moneyline|prop|parlay|bet of the day|best bet)/i.test(text);
+  return /(legalization|legalize|legislation|bill passed|state legislature|sports betting law|gambling law|regulation)/i.test(text) &&
+    !/(pick|odds|spread|moneyline|prop|parlay|best bet)/i.test(text);
 }
 
 function sportFromText(text: string): string | null {
   if (/\bmlb\b|baseball/i.test(text)) return "MLB";
   if (/\bnfl\b|football/i.test(text)) return "NFL";
   if (/\bnba\b|basketball/i.test(text)) return "NBA";
-  if (/college football|\bncaaf\b/i.test(text)) return "NCAA";
-  if (/college basketball|\bncaab\b|march madness/i.test(text)) return "NCAA";
-  if (/\bnhl\b|hockey/i.test(text)) return "NHL";
-  if (/\bwnba\b/i.test(text)) return "WNBA";
+  if (/college football|\bncaaf\b/i.test(text)) return "NCAAF";
+  if (/college basketball|\bncaab\b|march madness/i.test(text)) return "NCAAB";
   return null;
 }
 
-function scoreItem(item: AnyRecord): number {
-  const engagement = num(item.engagementScore);
-  const published = new Date(item.publishedAt ?? 0).getTime();
-  const freshness = Number.isFinite(published) ? Math.max(0, 24 - (Date.now() - published) / 3_600_000) : 0;
-  const bettingBoost = item.section === "betting" ? 25 : 0;
-  return engagement + freshness + bettingBoost;
+function marketFromText(text: string): string | null {
+  if (/moneyline|\bml\b/i.test(text)) return "Moneyline";
+  if (/spread|ats|against the spread/i.test(text)) return "Spread";
+  if (/total|over\/under|over under|\bo\/u\b/i.test(text)) return "Total";
+  if (/prop|player prop/i.test(text)) return "Prop";
+  if (/parlay/i.test(text)) return "Parlay";
+  return null;
 }
 
-function dedupe(items: AnyRecord[]): AnyRecord[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    const key = cleanText(item.url || item.title).toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-async function fetchJson(url: string, init?: RequestInit): Promise<AnyRecord> {
-  const response = await fetch(url, {
+async function fetchJson(url: string, init?: any): Promise<AnyRecord> {
+  const response: any = await fetch(url, {
     cache: "no-store",
     ...init,
     headers: {
@@ -122,162 +84,101 @@ async function fetchJson(url: string, init?: RequestInit): Promise<AnyRecord> {
       "User-Agent": "WingmanSports/2.0",
       ...(init?.headers ?? {}),
     },
-  });
-  if (!response.ok) throw new Error(`Provider returned ${response.status}`);
+  } as any);
+  if (!response?.ok) throw new Error(`Provider returned ${response?.status ?? "unknown"}`);
   return rec(await response.json());
 }
 
-async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      Accept: "text/html,application/xhtml+xml",
-      "User-Agent": "WingmanSports/2.0",
-    },
-  });
-  if (!response.ok) throw new Error(`Provider returned ${response.status}`);
-  return response.text();
-}
+async function getRedditPosts(section: CommunitySection): Promise<AnyRecord[]> {
+  const subs = section === "betting"
+    ? ["sportsbook", "sportsbetting"]
+    : ["mlb", "nfl", "nba", "collegebasketball", "cfb"];
 
-async function getRedditItems(): Promise<AnyRecord[]> {
-  const subs = ["sportsbook", "sportsbetting", "mlb", "nfl", "nba", "collegebasketball", "cfb"];
   const results = await Promise.allSettled(
     subs.map(async (sub) => {
-      const payload = await fetchJson(`${REDDIT_BASE_URL}/r/${sub}/new.json?limit=40&raw_json=1`);
+      const payload = await fetchJson(`${REDDIT_BASE_URL}/r/${sub}/new.json?limit=50&raw_json=1`);
       return arr(rec(payload.data).children).map((child) => {
         const data = rec(child.data);
-        const title = cleanText(data.title);
-        const body = cleanText(data.selftext);
-        const text = `${title} ${body}`;
-        const created = new Date(num(data.created_utc) * 1000).toISOString();
-        const section: CommunitySection = bettingRelevant(text) || sub.includes("bet") || sub === "sportsbook" ? "betting" : "news";
+        const headline = cleanText(data.title);
+        const excerpt = cleanText(data.selftext).slice(0, 360);
+        const text = `${headline} ${excerpt}`;
+        const publishedAt = new Date(num(data.created_utc) * 1000).toISOString();
         return {
           id: `reddit-${str(data.id)}`,
-          section,
-          sourceType: "Reddit",
-          sourceLabel: `r/${sub}`,
-          author: str(data.author),
-          title,
-          summary: body.slice(0, 280),
+          source: "Reddit",
+          community: `r/${sub}`,
+          author: str(data.author) || null,
+          headline,
+          excerpt: excerpt || null,
+          publishedAt,
           url: `${REDDIT_BASE_URL}${str(data.permalink)}`,
-          publishedAt: created,
+          score: data.score == null ? null : num(data.score),
+          comments: data.num_comments == null ? null : num(data.num_comments),
+          likes: null,
+          reposts: null,
+          isCuratedExpert: false,
           sport: sportFromText(text),
-          engagementScore: num(data.score) + num(data.num_comments) * 2,
-          comments: num(data.num_comments),
-          relevanceReason: section === "betting" ? "Recent sports-betting discussion" : "Recent sport discussion",
+          market: marketFromText(text),
+          bettingRelevant: bettingRelevant(text),
         };
       });
     }),
   );
-  return results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+
+  return results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
 }
 
-async function getEspnItems(): Promise<AnyRecord[]> {
+async function getEspnPosts(section: CommunitySection): Promise<AnyRecord[]> {
   const results = await Promise.allSettled(
     ESPN_NEWS_FEEDS.map(async (feed) => {
       const payload = await fetchJson(feed.url);
-      const articles = Array.isArray(payload.articles) ? payload.articles : [];
-      return articles.map((raw: any) => {
-        const article = rec(raw);
-        const title = cleanText(article.headline);
-        const summary = cleanText(article.description);
-        const publishedAt = toIso(article.published ?? article.lastModified);
-        const link = arr(article.links).find((x) => x?.rel === "web")?.href ?? rec(article.links).web?.href ?? rec(article.links).api?.href ?? "";
-        const text = `${title} ${summary}`;
+      return arr(payload.articles).map((article) => {
+        const headline = cleanText(article.headline);
+        const excerpt = cleanText(article.description);
+        const text = `${headline} ${excerpt}`;
+        const links = rec(article.links);
+        const url = str(rec(links.web).href || rec(links.api).href);
         return {
-          id: `espn-${str(article.id) || Buffer.from(title).toString("base64url")}`,
-          section: bettingRelevant(text) ? "betting" : "news",
-          sourceType: "News",
-          sourceLabel: feed.label,
-          author: cleanText(article.byline),
-          title,
-          summary,
-          url: str(link),
-          publishedAt,
-          sport: feed.sport,
-          engagementScore: 20,
-          comments: 0,
-          relevanceReason: bettingRelevant(text) ? "Sport-specific betting coverage" : "Recent sport news",
-        };
-      });
-    }),
-  );
-  return results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-}
-
-async function getHackerNewsItems(): Promise<AnyRecord[]> {
-  const results = await Promise.allSettled(
-    HACKER_NEWS_BETTING_QUERIES.map(async (query) => {
-      const payload = await fetchJson(`${HACKER_NEWS_SEARCH_URL}?query=${encodeURIComponent(query)}&tags=story&hitsPerPage=30`);
-      return arr(payload.hits).map((hit) => {
-        const title = cleanText(hit.title);
-        const publishedAt = toIso(hit.created_at);
-        return {
-          id: `hn-${str(hit.objectID)}`,
-          section: "betting" as const,
-          sourceType: "Community",
-          sourceLabel: "Hacker News",
-          author: str(hit.author),
-          title,
-          summary: "",
-          url: str(hit.url) || `https://news.ycombinator.com/item?id=${str(hit.objectID)}`,
-          publishedAt,
-          sport: sportFromText(title),
-          engagementScore: num(hit.points) + num(hit.num_comments) * 2,
-          comments: num(hit.num_comments),
-          relevanceReason: "Recent betting-related discussion",
-        };
-      });
-    }),
-  );
-  return results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-}
-
-async function getCoversItems(): Promise<AnyRecord[]> {
-  try {
-    const html = await fetchText(COVERS_ODDSSHARK_URL);
-    const links = [...html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
-    return links
-      .map((m, i) => {
-        const title = stripHtml(m[2]);
-        const href = str(m[1]);
-        const url = href.startsWith("http") ? href : href.startsWith("/") ? `https://www.covers.com${href}` : "";
-        return {
-          id: `covers-${i}-${Buffer.from(url || title).toString("base64url").slice(0, 18)}`,
-          section: "betting" as const,
-          sourceType: "Betting",
-          sourceLabel: "Covers",
-          author: "",
-          title,
-          summary: "",
+          id: `espn-${str(article.id) || headline.slice(0, 64)}`,
+          source: feed.label,
+          community: "ESPN",
+          author: cleanText(article.byline) || null,
+          headline,
+          excerpt: excerpt || null,
+          publishedAt: toIso(article.published ?? article.lastModified),
           url,
-          publishedAt: new Date().toISOString(),
-          sport: sportFromText(title),
-          engagementScore: 15,
-          comments: 0,
-          relevanceReason: "Sports betting coverage",
+          score: null,
+          comments: null,
+          likes: null,
+          reposts: null,
+          isCuratedExpert: false,
+          sport: feed.sport,
+          market: marketFromText(text),
+          bettingRelevant: bettingRelevant(text),
+          requestedSection: section,
         };
-      })
-      .filter((x) => x.title.length > 18 && bettingRelevant(x.title) && x.url)
-      .slice(0, 30);
-  } catch {
-    return [];
-  }
+      });
+    }),
+  );
+
+  return results.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
 }
 
-async function getXItems(): Promise<AnyRecord[]> {
+async function getXPosts(): Promise<AnyRecord[]> {
   const token = process.env.X_BEARER_TOKEN;
   if (!token) return [];
   const handles = CURATED_X_BETTING_EXPERT_HANDLES.slice(0, 8);
   if (!handles.length) return [];
-  const authorQuery = handles.map((h) => `from:${h}`).join(" OR ");
+
+  const authorQuery = handles.map((handle) => `from:${handle}`).join(" OR ");
   const query = `(${authorQuery}) (moneyline OR spread OR total OR prop OR parlay OR odds OR pick) -is:retweet`;
+
   try {
     const payload = await fetchJson(
       `${X_RECENT_SEARCH_URL}?query=${encodeURIComponent(query)}&max_results=100&tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=username,name`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    const users = new Map(arr(rec(payload.includes).users).map((u) => [str(u.id), u]));
+    const users = new Map(arr(rec(payload.includes).users).map((user) => [str(user.id), user]));
     return arr(payload.data).map((tweet) => {
       const user = users.get(str(tweet.author_id)) ?? {};
       const text = cleanText(tweet.text);
@@ -285,18 +186,21 @@ async function getXItems(): Promise<AnyRecord[]> {
       const username = str(user.username);
       return {
         id: `x-${str(tweet.id)}`,
-        section: "betting" as const,
-        sourceType: "Social",
-        sourceLabel: "X",
-        author: str(user.name) || username,
-        title: text.slice(0, 180),
-        summary: text,
-        url: username ? `https://x.com/${username}/status/${str(tweet.id)}` : X_SEARCH_PAGE_URL,
+        source: "X",
+        community: username ? `@${username}` : "Curated betting account",
+        author: str(user.name) || username || null,
+        headline: text.slice(0, 180),
+        excerpt: text || null,
         publishedAt: toIso(tweet.created_at),
+        url: username ? `https://x.com/${username}/status/${str(tweet.id)}` : "https://x.com/",
+        score: null,
+        comments: metrics.reply_count == null ? null : num(metrics.reply_count),
+        likes: metrics.like_count == null ? null : num(metrics.like_count),
+        reposts: metrics.retweet_count == null ? null : num(metrics.retweet_count),
+        isCuratedExpert: true,
         sport: sportFromText(text),
-        engagementScore: num(metrics.like_count) + num(metrics.retweet_count) * 2 + num(metrics.reply_count) * 2,
-        comments: num(metrics.reply_count),
-        relevanceReason: "Recent post from a curated betting account",
+        market: marketFromText(text),
+        bettingRelevant: true,
       };
     });
   } catch {
@@ -304,49 +208,55 @@ async function getXItems(): Promise<AnyRecord[]> {
   }
 }
 
+function dedupe(posts: AnyRecord[]): AnyRecord[] {
+  const seen = new Set<string>();
+  return posts.filter((post) => {
+    const key = cleanText(post.url || post.headline).toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 router.get("/community/feed", async (req, res) => {
-  const parsed = GetCommunityFeedQueryParams.safeParse(req.query);
-  if (!parsed.success) {
-    res.status(400).json({ error: "Invalid query parameters", detail: parsed.error.message });
+  const rawSection = String(req.query.section ?? "news").toLowerCase();
+  if (rawSection !== "betting" && rawSection !== "news") {
+    res.status(400).json({ error: "Invalid section. Use betting or news." });
     return;
   }
-  const requested = parsed.data.section;
-  const [reddit, espn, hn, covers, x] = await Promise.all([
-    getRedditItems(),
-    getEspnItems(),
-    getHackerNewsItems(),
-    getCoversItems(),
-    getXItems(),
+
+  const section = rawSection as CommunitySection;
+  const [reddit, espn, x] = await Promise.all([
+    getRedditPosts(section),
+    getEspnPosts(section),
+    section === "betting" ? getXPosts() : Promise.resolve([]),
   ]);
-  const items = dedupe([...reddit, ...espn, ...hn, ...covers, ...x])
-    .filter((item) => recentEnough(item.publishedAt))
-    .filter((item) => !legalizationOnly(`${item.title} ${item.summary}`))
-    .filter((item) => (requested ? item.section === requested : true))
-    .sort((a, b) => scoreItem(b) - scoreItem(a) || new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
-    .slice(0, parsed.data.limit ?? 80);
 
-  const payload = {
-    items,
-    generatedAt: new Date().toISOString(),
-    sources: {
-      reddit: reddit.length,
-      espn: espn.length,
-      hackerNews: hn.length,
-      covers: covers.length,
-      x: x.length,
-    },
-    warnings: [
-      ...(x.length ? [] : ["X live search is unavailable unless X_BEARER_TOKEN is configured."]),
-      ...(covers.length ? [] : ["Covers betting discovery did not return current parseable items."]),
-    ],
-  };
+  const posts = dedupe([...x, ...reddit, ...espn])
+    .filter((post) => recentEnough(post.publishedAt))
+    .filter((post) => !legalizationOnly(`${post.headline} ${post.excerpt ?? ""}`))
+    .filter((post) => (section === "betting" ? post.bettingRelevant === true : post.bettingRelevant !== true))
+    .sort((a, b) => {
+      const time = new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime();
+      if (time !== 0) return time;
+      return num(b.score) + num(b.comments) * 2 - (num(a.score) + num(a.comments) * 2);
+    })
+    .slice(0, 80)
+    .map(({ bettingRelevant: _bettingRelevant, requestedSection: _requestedSection, ...post }) => post);
 
-  const checked = GetCommunityFeedResponse.safeParse(payload);
-  if (!checked.success) {
-    res.status(500).json({ error: "Community feed validation failed", detail: checked.error.message });
-    return;
+  const warnings: string[] = [];
+  if (section === "betting" && !process.env.X_BEARER_TOKEN) {
+    warnings.push("X live search is unavailable until X_BEARER_TOKEN is configured.");
   }
-  res.json(checked.data);
+  if (!posts.length) warnings.push("No verified posts from the last 24 hours were available from the current sources.");
+
+  res.json({
+    section,
+    source: section === "betting" ? "Wingman betting sources" : "Wingman sports sources",
+    sourceUrl: section === "betting" ? "https://www.reddit.com/r/sportsbook/" : "https://www.espn.com/",
+    posts,
+    warning: warnings.length ? warnings.join(" ") : null,
+  });
 });
 
 export default router;
