@@ -56,10 +56,22 @@ function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
-async function fetchJson(url: string): Promise<any> {
+function providerMessage(text: string): string {
+  if (!text.trim()) return '';
+  try {
+    const payload = JSON.parse(text);
+    return String(payload?.detail ?? payload?.message ?? payload?.error ?? '').trim();
+  } catch {
+    return text.trim().slice(0, 240);
+  }
+}
+async function fetchJson(url: string, stage: string): Promise<any> {
   const r = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } });
   const text = await r.text();
-  if (!r.ok) throw new Error(`Odds-API.io returned ${r.status}`);
+  if (!r.ok) {
+    const detail = providerMessage(text);
+    throw new Error(`${stage}: Odds-API.io returned ${r.status}${detail ? ` — ${detail}` : ''}`);
+  }
   if (!text.trim()) return null;
   return JSON.parse(text);
 }
@@ -79,7 +91,10 @@ async function resolveSportAndLeague(league: LeagueKey, apiKey: string) {
   if (!sport || !matcher) throw new Error('Unsupported league');
 
   const leagues = arr(
-    await fetchJson(`${API_BASE}/leagues?apiKey=${encodeURIComponent(apiKey)}&sport=${encodeURIComponent(sport)}&all=true`),
+    await fetchJson(
+      `${API_BASE}/leagues?apiKey=${encodeURIComponent(apiKey)}&sport=${encodeURIComponent(sport)}&all=true`,
+      'league lookup',
+    ),
   );
   const found = leagues.find((row) => matcher.test(`${row.name ?? ''} ${row.slug ?? ''}`));
   if (!found?.slug) throw new Error(`Odds-API.io college league mapping unavailable for ${league}`);
@@ -183,7 +198,7 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
   });
   if (cfg.league) params.set('league', cfg.league);
 
-  const events = arr(await fetchJson(`${API_BASE}/events?${params.toString()}`));
+  const events = arr(await fetchJson(`${API_BASE}/events?${params.toString()}`, 'event lookup'));
   const ids = events.map((e) => String(e.id ?? '')).filter(Boolean);
   if (!ids.length) {
     const empty = { provider: 'Odds-API.io', bookmakers: books, events: [] };
@@ -200,7 +215,7 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
           eventIds: batch.join(','),
           bookmakers: books.join(','),
         });
-        return fetchJson(`${API_BASE}/odds/multi?${q.toString()}`);
+        return fetchJson(`${API_BASE}/odds/multi?${q.toString()}`, 'odds lookup');
       }),
     )
   ).flatMap((payload) => arr(payload));
