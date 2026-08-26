@@ -14,7 +14,10 @@ try {
     platform: "node",
     target: "node20",
     bundle: true,
-    packages: "external",
+    // Keep the StackBlitz API artifact self-contained. The previous external-package
+    // build could start successfully in Replit but then die in WebContainers with
+    // ERR_MODULE_NOT_FOUND when pnpm's workspace links were not available at runtime.
+    packages: "bundle",
     alias: {
       "@workspace/api-zod": path.resolve(workspaceRoot, "lib/api-zod/src/index.ts"),
     },
