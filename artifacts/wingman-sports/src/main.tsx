@@ -5,6 +5,8 @@ import { ErrorBoundary } from '@/components/error-boundary';
 
 import './index.css';
 import './scorecard-fixes.css';
+import './final-market-grades.css';
+import './final-market-grades';
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
