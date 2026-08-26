@@ -24,7 +24,7 @@ function n(v:any):number|null{const x=typeof v==='number'?v:Number(v);return Num
 function p(v:any):number|null{if(typeof v==='number'&&Number.isFinite(v))return v;if(typeof v==='string'){const m=v.match(/[+-]?\d+/);return m?Number(m[0]):null}return null}
 function status(raw:any){const t=obj(raw?.type);const state=String(t.state??t.name??'').toLowerCase();const label=String(t.shortDetail??t.detail??t.description??'UPCOMING');if(state==='in'||state.includes('progress'))return{status:'live',label};if(state==='post'||state.includes('final')||t.completed===true)return{status:'final',label};if(state.includes('postpon'))return{status:'postponed',label};if(state.includes('cancel'))return{status:'canceled',label};return{status:'upcoming',label}}
 function team(comp:any){const t=obj(comp?.team);return{abbreviation:String(t.abbreviation??t.shortDisplayName?.slice(0,4)??'TBD'),name:String(t.displayName??t.name??'TBD'),shortName:String(t.shortDisplayName??t.name??'TBD'),score:n(comp?.score),record:Array.isArray(comp?.records)?String(comp.records?.[0]?.summary??'')||null:null,logo:typeof t.logo==='string'?t.logo:typeof t.logos?.[0]?.href==='string'?t.logos[0].href:null}}
-function odds(comp:any){const o=obj(comp?.odds?.[0]);if(!Object.keys(o).length)return null;const spread=n(o.spread),awayFav=obj(o.awayTeamOdds).favorite===true,homeFav=obj(o.homeTeamOdds).favorite===true;return{awaySpread:spread===null?null:awayFav?-Math.abs(spread):Math.abs(spread),homeSpread:spread===null?null:homeFav?-Math.abs(spread):Math.abs(spread),awaySpreadPrice:p(obj(o.awayTeamOdds).spreadOdds),homeSpreadPrice:p(obj(o.homeTeamOdds).spreadOdds),awayMoneyline:p(obj(o.awayTeamOdds).moneyLine),homeMoneyline:p(obj(o.homeTeamOdds).moneyLine),total:n(o.overUnder),overPrice:p(o.overOdds),underPrice:p(o.underOdds),splits:null}}
+function odds(comp:any){const o=obj(comp?.odds?.[0]);if(!Object.keys(o).length)return null;const spread=n(o.spread),awayFav=obj(o.awayTeamOdds).favorite===true,homeFav=obj(o.homeTeamOdds).favorite===true;return{awaySpread:spread===null?null:awayFav?-Math.abs(spread):Math.abs(spread),homeSpread:spread===null?null:homeFav?-Math.abs(spread):Math.abs(spread),awaySpreadPrice:p(obj(o.awayTeamOdds).spreadOdds),homeSpreadPrice:p(obj(o.homeTeamOdds).spreadOdds),awayMoneyline:p(obj(o.awayTeamOdds).moneyLine),homeMoneyline:p(obj(o.homeTeamOdds).moneyLine),total:n(o.overUnder),overPrice:p(o.overOdds),underPrice:p(o.underOdds),splits:null,source:'ESPN',bookmaker:String(obj(o.provider).name??'ESPN')}}
 async function json(response:Response){const text=await response.text();if(!text.trim())throw new Error(`Empty response (${response.status||'network'})`);let payload:any;try{payload=JSON.parse(text)}catch{throw new Error(`Invalid JSON response (${response.status||'network'})`)}if(!response.ok)throw new Error(payload?.detail||payload?.error||`Request failed (${response.status})`);return payload}
 
 function cacheKey(league:LeagueKey,date:string){return `wingman:scoreboard:${league}:${date}`}
@@ -50,12 +50,40 @@ function missingCoreMarkets(betting:any){const b=obj(betting);return b.awayMoney
 function normalizeName(v:any){return String(v??'').toLowerCase().replace(/[^a-z0-9]/g,'')}
 function teamAliases(t:any){return [t?.name,t?.shortName,t?.abbreviation].map(normalizeName).filter((x)=>x.length>=2)}
 function sameTeam(providerName:any,t:any){const x=normalizeName(providerName);if(!x)return false;return teamAliases(t).some((a)=>x===a||(a.length>=5&&(x.includes(a)||a.includes(x))))}
-function mergeBetting(current:any,backup:any){const a=obj(current),b=obj(backup);return{awaySpread:a.awaySpread??b.awaySpread??null,homeSpread:a.homeSpread??b.homeSpread??null,awaySpreadPrice:a.awaySpreadPrice??b.awaySpreadPrice??null,homeSpreadPrice:a.homeSpreadPrice??b.homeSpreadPrice??null,awayMoneyline:a.awayMoneyline??b.awayMoneyline??null,homeMoneyline:a.homeMoneyline??b.homeMoneyline??null,total:a.total??b.total??null,overPrice:a.overPrice??b.overPrice??null,underPrice:a.underPrice??b.underPrice??null,splits:a.splits??null,source:a.source??b.source??null,bookmaker:a.bookmaker??b.bookmaker??null}}
+function sameGame(a:any,b:any){const aid=String(a?.id??''),bid=String(b?.id??'');if(aid&&bid&&aid===bid)return true;return sameTeam(a?.home?.name??a?.home?.shortName??a?.home?.abbreviation,b?.home)&&sameTeam(a?.away?.name??a?.away?.shortName??a?.away?.abbreviation,b?.away)}
+function mergeBetting(current:any,backup:any){const a=obj(current),b=obj(backup);return{awaySpread:a.awaySpread??b.awaySpread??null,homeSpread:a.homeSpread??b.homeSpread??null,awaySpreadPrice:a.awaySpreadPrice??b.awaySpreadPrice??null,homeSpreadPrice:a.homeSpreadPrice??b.homeSpreadPrice??null,awayMoneyline:a.awayMoneyline??b.awayMoneyline??null,homeMoneyline:a.homeMoneyline??b.homeMoneyline??null,total:a.total??b.total??null,overPrice:a.overPrice??b.overPrice??null,underPrice:a.underPrice??b.underPrice??null,splits:a.splits??b.splits??null,source:a.source??b.source??null,bookmaker:a.bookmaker??b.bookmaker??null}}
 function hideUnplayedScores(payload:ScoreboardPayload):ScoreboardPayload{
   return{...payload,games:payload.games.map((g:any)=>{
     if(g?.status==='live'||g?.status==='final')return g;
     return{...g,away:{...obj(g?.away),score:null},home:{...obj(g?.home),score:null}};
   })};
+}
+function restoreCachedMarkets(payload:ScoreboardPayload):ScoreboardPayload{
+  const cached=readCache(payload.league,payload.date);
+  if(!cached?.games?.length)return payload;
+  const games=payload.games.map((g:any)=>{
+    const old=cached.games.find((x:any)=>sameGame(g,x));
+    if(!old?.betting)return g;
+    return{...g,betting:mergeBetting(g?.betting,old.betting)};
+  });
+  return{...payload,games};
+}
+async function enrichFinalWithEspnMarkets(payload:ScoreboardPayload):Promise<ScoreboardPayload>{
+  const needs=payload.games.some((g:any)=>g?.status==='final'&&missingCoreMarkets(g?.betting));
+  if(!needs)return payload;
+  try{
+    const espn=await tryEspn(payload.league,payload.date);
+    let used=0;
+    const games=payload.games.map((g:any)=>{
+      if(g?.status!=='final'||!missingCoreMarkets(g?.betting))return g;
+      const match=espn.games.find((x:any)=>sameGame(g,x));
+      if(!match?.betting)return g;
+      used+=1;
+      return{...g,betting:mergeBetting(g?.betting,match.betting)};
+    });
+    if(!used)return payload;
+    return{...payload,games,oddsProvider:payload.oddsProvider??'ESPN'};
+  }catch{return payload}
 }
 async function enrichWithOddsBackup(payload:ScoreboardPayload):Promise<ScoreboardPayload>{
   const needs=payload.games.some((g:any)=>(g?.status==='upcoming'||g?.status==='live')&&missingCoreMarkets(g?.betting));
@@ -78,7 +106,12 @@ async function enrichWithOddsBackup(payload:ScoreboardPayload):Promise<Scoreboar
     return{...payload,games,oddsProvider:'Odds-API.io',warning:[payload.warning,`Missing betting markets were filled from Odds-API.io${books?` (${books})`:''}.`].filter(Boolean).join(' ')};
   }catch{return payload}
 }
-async function finish(value:ScoreboardPayload){return remember(await enrichWithOddsBackup(hideUnplayedScores(value)))}
+async function finish(value:ScoreboardPayload){
+  let prepared=restoreCachedMarkets(hideUnplayedScores(value));
+  prepared=await enrichFinalWithEspnMarkets(prepared);
+  prepared=await enrichWithOddsBackup(prepared);
+  return remember(prepared);
+}
 
 export async function fetchScoreboard(league:LeagueKey,date:string):Promise<ScoreboardPayload>{
   const failures:string[]=[];
