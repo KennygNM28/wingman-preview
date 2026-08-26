@@ -51,6 +51,12 @@ function normalizeName(v:any){return String(v??'').toLowerCase().replace(/[^a-z0
 function teamAliases(t:any){return [t?.name,t?.shortName,t?.abbreviation].map(normalizeName).filter((x)=>x.length>=2)}
 function sameTeam(providerName:any,t:any){const x=normalizeName(providerName);if(!x)return false;return teamAliases(t).some((a)=>x===a||(a.length>=5&&(x.includes(a)||a.includes(x))))}
 function mergeBetting(current:any,backup:any){const a=obj(current),b=obj(backup);return{awaySpread:a.awaySpread??b.awaySpread??null,homeSpread:a.homeSpread??b.homeSpread??null,awaySpreadPrice:a.awaySpreadPrice??b.awaySpreadPrice??null,homeSpreadPrice:a.homeSpreadPrice??b.homeSpreadPrice??null,awayMoneyline:a.awayMoneyline??b.awayMoneyline??null,homeMoneyline:a.homeMoneyline??b.homeMoneyline??null,total:a.total??b.total??null,overPrice:a.overPrice??b.overPrice??null,underPrice:a.underPrice??b.underPrice??null,splits:a.splits??null,source:a.source??b.source??null,bookmaker:a.bookmaker??b.bookmaker??null}}
+function hideUnplayedScores(payload:ScoreboardPayload):ScoreboardPayload{
+  return{...payload,games:payload.games.map((g:any)=>{
+    if(g?.status==='live'||g?.status==='final')return g;
+    return{...g,away:{...obj(g?.away),score:null},home:{...obj(g?.home),score:null}};
+  })};
+}
 async function enrichWithOddsBackup(payload:ScoreboardPayload):Promise<ScoreboardPayload>{
   const needs=payload.games.some((g:any)=>(g?.status==='upcoming'||g?.status==='live')&&missingCoreMarkets(g?.betting));
   if(!needs)return payload;
@@ -72,7 +78,7 @@ async function enrichWithOddsBackup(payload:ScoreboardPayload):Promise<Scoreboar
     return{...payload,games,oddsProvider:'Odds-API.io',warning:[payload.warning,`Missing betting markets were filled from Odds-API.io${books?` (${books})`:''}.`].filter(Boolean).join(' ')};
   }catch{return payload}
 }
-async function finish(value:ScoreboardPayload){return remember(await enrichWithOddsBackup(value))}
+async function finish(value:ScoreboardPayload){return remember(await enrichWithOddsBackup(hideUnplayedScores(value)))}
 
 export async function fetchScoreboard(league:LeagueKey,date:string):Promise<ScoreboardPayload>{
   const failures:string[]=[];
@@ -88,6 +94,6 @@ export async function fetchScoreboard(league:LeagueKey,date:string):Promise<Scor
   try{return await finish(await tryEspn(league,date))}catch(e){failures.push(`ESPN: ${e instanceof Error?e.message:'unavailable'}`)}
 
   const cached=readCache(league,date);
-  if(cached)return{...cached,provider:`${cached.provider} (cached)`,warning:`Live providers are temporarily unavailable. Showing the last successfully loaded ${ESPN[league].label} data for ${date}.`};
+  if(cached){const safe=hideUnplayedScores(cached);return{...safe,provider:`${safe.provider} (cached)`,warning:`Live providers are temporarily unavailable. Showing the last successfully loaded ${ESPN[league].label} data for ${date}.`}}
   throw new Error(failures.join(' • '));
 }
