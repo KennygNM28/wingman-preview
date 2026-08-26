@@ -152,7 +152,7 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
     apiKey,
     sport: cfg.sport,
     league: cfg.league,
-    status: 'pending,live',
+    status: 'pending,live,settled',
     from,
     to,
   });
@@ -190,6 +190,7 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
         home: String(row.home ?? event.home ?? ''),
         away: String(row.away ?? event.away ?? ''),
         startTime: String(row.date ?? event.date ?? ''),
+        status: String(event.status ?? ''),
         betting,
       };
     })
