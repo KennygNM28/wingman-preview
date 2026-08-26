@@ -18,7 +18,6 @@ type Betting = {
 
 const API_BASE = 'https://api.odds-api.io/v3';
 
-// Odds-API.io uses generic sport slugs plus league slugs for US competitions.
 const PROVIDER: Record<LeagueKey, { sport: string; league: string }> = {
   mlb: { sport: 'baseball', league: 'usa-mlb' },
   nfl: { sport: 'american-football', league: 'usa-nfl' },
@@ -34,6 +33,14 @@ function rec(v: unknown): AnyRecord {
 }
 function arr(v: unknown): AnyRecord[] {
   return Array.isArray(v) ? v.map(rec) : [];
+}
+function rows(v: unknown): AnyRecord[] {
+  if (Array.isArray(v)) return arr(v);
+  const o = rec(v);
+  for (const key of ['events', 'data', 'results', 'items']) {
+    if (Array.isArray(o[key])) return arr(o[key]);
+  }
+  return Object.keys(o).length ? [o] : [];
 }
 function num(v: unknown): number | null {
   const x = Number(v);
@@ -100,8 +107,8 @@ function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
 
     for (const market of markets) {
       const name = String(market.name ?? market.market ?? '').toLowerCase();
-      const rows = Array.isArray(market.odds) ? market.odds.map(rec) : [market];
-      for (const row of rows) {
+      const marketRows = Array.isArray(market.odds) ? market.odds.map(rec) : [market];
+      for (const row of marketRows) {
         if (/^(ml|moneyline|money line|h2h)$/.test(name) || name.includes('moneyline')) {
           out.homeMoneyline ??= american(row.home);
           out.awayMoneyline ??= american(row.away);
@@ -132,6 +139,21 @@ function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
   return null;
 }
 
+function historicalBetting(payload: unknown, books: string[]): Betting | null {
+  const root = rec(payload);
+  const candidates: AnyRecord[] = [];
+  if (Array.isArray(payload)) candidates.push(...arr(payload));
+  for (const key of ['snapshots', 'history', 'data', 'results', 'odds']) {
+    if (Array.isArray(root[key])) candidates.push(...arr(root[key]));
+  }
+  if (Object.keys(root).length) candidates.push(root);
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const parsed = parseMarkets(candidates[i], books);
+    if (parsed) return { ...parsed, source: 'Odds-API.io historical' };
+  }
+  return null;
+}
+
 function dateWindow(date: string) {
   const start = new Date(`${date}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) throw new Error('Invalid date');
@@ -139,6 +161,61 @@ function dateWindow(date: string) {
     from: new Date(start.getTime() - 12 * 60 * 60 * 1000).toISOString(),
     to: new Date(start.getTime() + 36 * 60 * 60 * 1000).toISOString(),
   };
+}
+
+function isPastDate(date: string) {
+  const today = new Date().toISOString().slice(0, 10);
+  return date < today;
+}
+
+async function historicalRows(
+  league: LeagueKey,
+  date: string,
+  apiKey: string,
+  books: string[],
+  skipIds: Set<string>,
+) {
+  const cfg = PROVIDER[league];
+  const { from, to } = dateWindow(date);
+  const q = new URLSearchParams({ apiKey, sport: cfg.sport, league: cfg.league, from, to });
+  const historicalEvents = rows(
+    await fetchJson(`${API_BASE}/historical/events?${q.toString()}`, 'historical event lookup'),
+  ).slice(0, 20);
+
+  const wanted = historicalEvents.filter((event) => {
+    const id = String(event.id ?? '');
+    return id && !skipIds.has(id);
+  });
+
+  const settled = await Promise.allSettled(
+    wanted.map(async (event) => {
+      const id = String(event.id ?? '');
+      const oq = new URLSearchParams({
+        apiKey,
+        eventId: id,
+        bookmakers: books.join(','),
+      });
+      const payload = await fetchJson(
+        `${API_BASE}/historical/odds?${oq.toString()}`,
+        `historical odds lookup ${id}`,
+      );
+      const betting = historicalBetting(payload, books);
+      if (!betting) return null;
+      return {
+        id,
+        home: String(event.home ?? ''),
+        away: String(event.away ?? ''),
+        startTime: String(event.date ?? ''),
+        status: 'settled',
+        betting,
+      };
+    }),
+  );
+
+  return settled
+    .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
+    .map((result) => result.value)
+    .filter(Boolean);
 }
 
 async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: string[]) {
@@ -157,27 +234,31 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
     to,
   });
 
-  const events = arr(await fetchJson(`${API_BASE}/events?${params.toString()}`, 'event lookup'));
-  const ids = events.map((e) => String(e.id ?? '')).filter(Boolean);
-
-  if (!ids.length) {
-    const empty = { provider: 'Odds-API.io', bookmakers: books, events: [] };
-    memory.set(cacheKey, { expires: Date.now() + 15 * 60 * 1000, value: empty });
-    return empty;
+  let warning: string | null = null;
+  let events: AnyRecord[] = [];
+  try {
+    events = rows(await fetchJson(`${API_BASE}/events?${params.toString()}`, 'event lookup'));
+  } catch (error) {
+    warning = error instanceof Error ? error.message : 'Current event lookup unavailable';
   }
 
-  const oddsRows = (
-    await Promise.all(
-      chunk(ids, 10).map((batch) => {
+  const ids = events.map((e) => String(e.id ?? '')).filter(Boolean);
+  let oddsRows: AnyRecord[] = [];
+  if (ids.length) {
+    const results = await Promise.allSettled(
+      chunk(ids, 10).map(async (batch) => {
         const q = new URLSearchParams({
           apiKey,
           eventIds: batch.join(','),
           bookmakers: books.join(','),
         });
-        return fetchJson(`${API_BASE}/odds/multi?${q.toString()}`, 'odds lookup');
+        return rows(await fetchJson(`${API_BASE}/odds/multi?${q.toString()}`, 'odds lookup'));
       }),
-    )
-  ).flatMap((payload) => arr(payload));
+    );
+    oddsRows = results
+      .filter((result): result is PromiseFulfilledResult<AnyRecord[]> => result.status === 'fulfilled')
+      .flatMap((result) => result.value);
+  }
 
   const eventById = new Map(events.map((event) => [String(event.id ?? ''), event]));
   const parsed = oddsRows
@@ -194,10 +275,34 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
         betting,
       };
     })
-    .filter(Boolean);
+    .filter(Boolean) as AnyRecord[];
 
-  const value = { provider: 'Odds-API.io', bookmakers: books, events: parsed };
-  memory.set(cacheKey, { expires: Date.now() + 15 * 60 * 1000, value });
+  if (isPastDate(date) || events.some((event) => String(event.status ?? '').toLowerCase() === 'settled')) {
+    try {
+      const historical = await historicalRows(
+        league,
+        date,
+        apiKey,
+        books,
+        new Set(parsed.map((event) => String(event.id ?? ''))),
+      );
+      parsed.push(...historical);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Historical odds unavailable';
+      warning = [warning, detail].filter(Boolean).join(' • ');
+    }
+  }
+
+  const value = {
+    provider: 'Odds-API.io',
+    bookmakers: books,
+    events: parsed,
+    warning,
+  };
+  memory.set(cacheKey, {
+    expires: Date.now() + (isPastDate(date) ? 6 * 60 * 60 * 1000 : 15 * 60 * 1000),
+    value,
+  });
   return value;
 }
 
@@ -232,7 +337,11 @@ export default async function handler(req: any, res: any) {
 
   try {
     const payload = await loadOdds(league, date, apiKey, books);
-    res.setHeader('Cache-Control', 'public, s-maxage=900, stale-while-revalidate=300');
+    const past = isPastDate(date);
+    res.setHeader(
+      'Cache-Control',
+      past ? 'public, s-maxage=21600, stale-while-revalidate=3600' : 'public, s-maxage=900, stale-while-revalidate=300',
+    );
     res.status(200).json(payload);
   } catch (error) {
     res.status(502).json({
