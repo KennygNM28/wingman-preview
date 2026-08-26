@@ -21,6 +21,7 @@
   box-sizing: border-box;
   border: 1px solid rgba(255,255,255,.24);
   transform: translate(-50%, -50%) rotate(45deg);
+  transform-origin: center;
   background: transparent;
 }
 
@@ -28,10 +29,13 @@
   width: .58rem !important;
   height: .58rem !important;
   translate: none !important;
+  rotate: 0deg !important;
+  scale: none !important;
   inset: auto !important;
   z-index: 1;
   box-sizing: border-box;
   margin: 0 !important;
+  transform-origin: center !important;
 }
 
 /* 3B — center sits exactly on the left vertex. */
@@ -67,6 +71,7 @@
   bottom: auto !important;
   width: .66rem !important;
   height: .66rem !important;
+  rotate: 0deg !important;
   transform: translate(-50%, -50%) !important;
   clip-path: polygon(10% 0, 90% 0, 90% 58%, 50% 100%, 10% 58%);
   border: 0 !important;
