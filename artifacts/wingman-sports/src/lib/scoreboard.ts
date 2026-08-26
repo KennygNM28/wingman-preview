@@ -86,7 +86,7 @@ async function enrichFinalWithEspnMarkets(payload:ScoreboardPayload):Promise<Sco
   }catch{return payload}
 }
 async function enrichWithOddsBackup(payload:ScoreboardPayload):Promise<ScoreboardPayload>{
-  const needs=payload.games.some((g:any)=>(g?.status==='upcoming'||g?.status==='live')&&missingCoreMarkets(g?.betting));
+  const needs=payload.games.some((g:any)=>(g?.status==='upcoming'||g?.status==='live'||g?.status==='final')&&missingCoreMarkets(g?.betting));
   if(!needs)return payload;
   try{
     const r=await fetch(`/api/odds?league=${encodeURIComponent(payload.league)}&date=${encodeURIComponent(payload.date)}`,{cache:'no-store'});
@@ -95,7 +95,7 @@ async function enrichWithOddsBackup(payload:ScoreboardPayload):Promise<Scoreboar
     if(!events.length)return payload;
     let used=0;
     const games=payload.games.map((g:any)=>{
-      if((g?.status!=='upcoming'&&g?.status!=='live')||!missingCoreMarkets(g?.betting))return g;
+      if((g?.status!=='upcoming'&&g?.status!=='live'&&g?.status!=='final')||!missingCoreMarkets(g?.betting))return g;
       const match=events.find((e:any)=>(sameTeam(e?.home,g?.home)&&sameTeam(e?.away,g?.away))||(sameTeam(e?.home,g?.away)&&sameTeam(e?.away,g?.home)));
       if(!match?.betting)return g;
       used+=1;
