@@ -17,22 +17,17 @@ type Betting = {
 };
 
 const API_BASE = 'https://api.odds-api.io/v3';
-const PRO_SPORT: Partial<Record<LeagueKey, string>> = {
-  mlb: 'mlb',
-  nfl: 'nfl',
-  nba: 'nba',
-};
-const COLLEGE_SPORT_FALLBACK: Partial<Record<LeagueKey, string>> = {
-  ncaaf: 'football',
-  ncaab: 'basketball',
-};
-const COLLEGE_LEAGUE_RE: Partial<Record<LeagueKey, RegExp>> = {
-  ncaaf: /(ncaa|college).*(football)|football.*(ncaa|college)/i,
-  ncaab: /(ncaa|college).*(basketball)|basketball.*(ncaa|college)/i,
+
+// Odds-API.io uses generic sport slugs plus league slugs for US competitions.
+const PROVIDER: Record<LeagueKey, { sport: string; league: string }> = {
+  mlb: { sport: 'baseball', league: 'usa-mlb' },
+  nfl: { sport: 'american-football', league: 'usa-nfl' },
+  nba: { sport: 'basketball', league: 'usa-nba' },
+  ncaaf: { sport: 'american-football', league: 'usa-ncaaf' },
+  ncaab: { sport: 'basketball', league: 'usa-ncaa' },
 };
 
 const memory = new Map<string, { expires: number; value: any }>();
-const leagueCache = new Map<LeagueKey, { expires: number; sport: string; league?: string }>();
 
 function rec(v: unknown): AnyRecord {
   return v && typeof v === 'object' ? (v as AnyRecord) : {};
@@ -41,8 +36,8 @@ function arr(v: unknown): AnyRecord[] {
   return Array.isArray(v) ? v.map(rec) : [];
 }
 function num(v: unknown): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  const x = Number(v);
+  return Number.isFinite(x) ? x : null;
 }
 function american(v: unknown): number | null {
   const x = Number(v);
@@ -56,56 +51,21 @@ function chunk<T>(items: T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
-function providerMessage(text: string): string {
-  if (!text.trim()) return '';
-  try {
-    const payload = JSON.parse(text);
-    return String(payload?.detail ?? payload?.message ?? payload?.error ?? '').trim();
-  } catch {
-    return text.trim().slice(0, 240);
-  }
-}
 async function fetchJson(url: string, stage: string): Promise<any> {
   const r = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } });
   const text = await r.text();
   if (!r.ok) {
-    const detail = providerMessage(text);
+    let detail = text.trim();
+    try {
+      const parsed = JSON.parse(text);
+      detail = String(parsed?.detail ?? parsed?.error ?? parsed?.message ?? detail);
+    } catch {
+      // Keep provider text as-is.
+    }
     throw new Error(`${stage}: Odds-API.io returned ${r.status}${detail ? ` — ${detail}` : ''}`);
   }
   if (!text.trim()) return null;
   return JSON.parse(text);
-}
-
-async function resolveSportAndLeague(league: LeagueKey, apiKey: string) {
-  const cached = leagueCache.get(league);
-  if (cached && cached.expires > Date.now()) return cached;
-
-  if (PRO_SPORT[league]) {
-    const value = { expires: Date.now() + 6 * 60 * 60 * 1000, sport: PRO_SPORT[league]! };
-    leagueCache.set(league, value);
-    return value;
-  }
-
-  const sport = COLLEGE_SPORT_FALLBACK[league];
-  const matcher = COLLEGE_LEAGUE_RE[league];
-  if (!sport || !matcher) throw new Error('Unsupported league');
-
-  const leagues = arr(
-    await fetchJson(
-      `${API_BASE}/leagues?apiKey=${encodeURIComponent(apiKey)}&sport=${encodeURIComponent(sport)}&all=true`,
-      'league lookup',
-    ),
-  );
-  const found = leagues.find((row) => matcher.test(`${row.name ?? ''} ${row.slug ?? ''}`));
-  if (!found?.slug) throw new Error(`Odds-API.io college league mapping unavailable for ${league}`);
-
-  const value = {
-    expires: Date.now() + 6 * 60 * 60 * 1000,
-    sport,
-    league: String(found.slug),
-  };
-  leagueCache.set(league, value);
-  return value;
 }
 
 function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
@@ -167,9 +127,7 @@ function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
       out.awayMoneyline !== null ||
       out.homeMoneyline !== null ||
       out.total !== null
-    ) {
-      return out;
-    }
+    ) return out;
   }
   return null;
 }
@@ -177,9 +135,10 @@ function parseMarkets(raw: AnyRecord, wantedBooks: string[]): Betting | null {
 function dateWindow(date: string) {
   const start = new Date(`${date}T00:00:00Z`);
   if (Number.isNaN(start.getTime())) throw new Error('Invalid date');
-  const from = new Date(start.getTime() - 12 * 60 * 60 * 1000).toISOString();
-  const to = new Date(start.getTime() + 36 * 60 * 60 * 1000).toISOString();
-  return { from, to };
+  return {
+    from: new Date(start.getTime() - 12 * 60 * 60 * 1000).toISOString(),
+    to: new Date(start.getTime() + 36 * 60 * 60 * 1000).toISOString(),
+  };
 }
 
 async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: string[]) {
@@ -187,29 +146,29 @@ async function loadOdds(league: LeagueKey, date: string, apiKey: string, books: 
   const cached = memory.get(cacheKey);
   if (cached && cached.expires > Date.now()) return cached.value;
 
-  const cfg = await resolveSportAndLeague(league, apiKey);
+  const cfg = PROVIDER[league];
   const { from, to } = dateWindow(date);
   const params = new URLSearchParams({
     apiKey,
     sport: cfg.sport,
+    league: cfg.league,
     status: 'pending,live',
     from,
     to,
   });
-  if (cfg.league) params.set('league', cfg.league);
 
   const events = arr(await fetchJson(`${API_BASE}/events?${params.toString()}`, 'event lookup'));
   const ids = events.map((e) => String(e.id ?? '')).filter(Boolean);
+
   if (!ids.length) {
     const empty = { provider: 'Odds-API.io', bookmakers: books, events: [] };
     memory.set(cacheKey, { expires: Date.now() + 15 * 60 * 1000, value: empty });
     return empty;
   }
 
-  const batches = chunk(ids, 10);
   const oddsRows = (
     await Promise.all(
-      batches.map((batch) => {
+      chunk(ids, 10).map((batch) => {
         const q = new URLSearchParams({
           apiKey,
           eventIds: batch.join(','),
@@ -255,7 +214,7 @@ export default async function handler(req: any, res: any) {
 
   const league = String(req.query?.league ?? '').toLowerCase() as LeagueKey;
   const date = String(req.query?.date ?? '');
-  if (!['mlb', 'nfl', 'nba', 'ncaaf', 'ncaab'].includes(league)) {
+  if (!Object.prototype.hasOwnProperty.call(PROVIDER, league)) {
     res.status(400).json({ error: 'Unsupported league' });
     return;
   }
