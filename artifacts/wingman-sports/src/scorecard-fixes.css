@@ -1,54 +1,70 @@
 /* Scorecard-specific refinements.
-   MLB runner indicator: 2B at the top, 3B lower-left, 1B lower-right.
-   Reset Tailwind's translate property so the original utility classes cannot
-   shift the bases after these explicit positions are applied. */
+   Compact baseball diamond modeled after the familiar field layout:
+   2B top, 3B left, 1B right, home plate bottom. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] {
   position: relative !important;
-  width: 3.5rem !important;
-  height: 2.75rem !important;
-  overflow: visible !important;
-  flex: 0 0 3.5rem !important;
+  width: 2.8rem !important;
+  height: 2.8rem !important;
+  flex: 0 0 2.8rem !important;
+}
+
+/* Connected baselines behind the base markers. */
+.wm-game-card div[aria-label] div[aria-hidden="true"]::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1.72rem;
+  height: 1.72rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(255,255,255,.24);
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: transparent;
 }
 
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span {
-  position: absolute !important;
-  width: .72rem !important;
-  height: .72rem !important;
-  margin: 0 !important;
+  width: .58rem !important;
+  height: .58rem !important;
   translate: none !important;
+  inset: auto !important;
+  z-index: 1;
+  box-sizing: border-box;
 }
 
 /* 3B */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(1) {
   display: block !important;
-  left: .35rem !important;
-  right: auto !important;
-  top: 1.35rem !important;
-  bottom: auto !important;
-  transform: rotate(45deg) !important;
+  left: .18rem !important;
+  top: 50% !important;
+  transform: translateY(-50%) rotate(45deg) !important;
 }
 
 /* 2B */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(2) {
   display: block !important;
   left: 50% !important;
-  right: auto !important;
-  top: .08rem !important;
-  bottom: auto !important;
+  top: .18rem !important;
   transform: translateX(-50%) rotate(45deg) !important;
 }
 
 /* 1B */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(3) {
   display: block !important;
-  left: auto !important;
-  right: .35rem !important;
-  top: 1.35rem !important;
-  bottom: auto !important;
-  transform: rotate(45deg) !important;
+  right: .18rem !important;
+  top: 50% !important;
+  transform: translateY(-50%) rotate(45deg) !important;
 }
 
-/* Home plate is intentionally not part of the occupied-base indicator. */
+/* Home plate anchor — never represents an occupied base. */
 .wm-game-card div[aria-label] div[aria-hidden="true"] > span:nth-child(4) {
-  display: none !important;
+  display: block !important;
+  left: 50% !important;
+  bottom: .08rem !important;
+  width: .66rem !important;
+  height: .66rem !important;
+  transform: translateX(-50%) !important;
+  clip-path: polygon(10% 0, 90% 0, 90% 58%, 50% 100%, 10% 58%);
+  border: 0 !important;
+  background: rgba(255,255,255,.08) !important;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.28);
 }
